@@ -22,13 +22,17 @@ The application SHALL use a clear typography hierarchy to distinguish between he
 - **AND** secondary text (like dates or status counts) should be smaller and lighter in color
 
 ### Requirement: Task List Presentation
-The task list SHALL be presented as a unified, clean list with minimal visual noise.
+The task list SHALL be presented as a scrollable list of interactive rows, allowing users to view and manage tasks directly.
 
 #### Scenario: Viewing tasks
 - **WHEN** tasks are added to the list
-- **THEN** they should appear in a clean list format without heavy borders
-- **AND** the selection state should be clearly visible with a highlight color
-- **AND** the list background should contrast slightly with the main window background (e.g., White card on Gray background)
+- **THEN** each task should be displayed in its own row container
+- **AND** the list background should contrast slightly with the main window background
+
+#### Scenario: Task completion interaction
+- **WHEN** a user views a task row
+- **THEN** a completion control (checkbox or button) should be visible on the right side
+- **AND** clicking the control should mark the task as complete and remove it
 
 ### Requirement: Interactive Elements Styling
 Buttons and inputs SHALL have consistent styling that indicates their state and function.

@@ -1,28 +1,29 @@
-# Initialise the object of the todo list
+# Import the necessary modules: datetime for handling dates and times, threading for concurrent operations,
+# uuid for generating unique task IDs, queue for thread-safe communication, and calendar for date calculations.
 import datetime as dt
 import threading
-import time
 import uuid
 import queue
+import calendar
 class todolist:
     def __init__(self):
-        # 現在的 tasks 將儲存字典而不是字符串，保持向後兼容性
         self.tasks = []
         self.selected_index = None
 
     def add_task(self, task, notification_time=None):
         """
-        添加任務，可選日期時間
+        Add a new task to the list, optionally specifying a time for a notification reminder.
 
         Args:
-            task: 任務文本 (str)
-            notification_time: 通知時間 (datetime, 可選)
+            task: The content of the task as a string.
+            notification_time: An optional datetime object indicating when to trigger a notification for this task.
 
         Returns:
-            str: 確認訊息
+            str: A confirmation message indicating the task has been added or scheduled.
         """
         if isinstance(task, str):
-            # 為向後兼容，將字符串轉換為字典格式
+            # For backward compatibility with older string-only tasks, convert the input string into a structured dictionary.
+            # This dictionary stores the task text, the optional notification time, a unique ID, and the creation timestamp.
             task_dict = {
                 'text': task,
                 'notification_time': notification_time,
@@ -31,7 +32,8 @@ class todolist:
             }
             self.tasks.append(task_dict)
         else:
-            # 如果是字典格式（新版本），直接添加
+            # If the input is already a dictionary (representing the newer task format), ensure it has an ID and creation time
+            # if they are missing, then add it to the list.
             task['id'] = task.get('id', str(uuid.uuid4()))
             task['created_at'] = task.get('created_at', dt.datetime.now())
             self.tasks.append(task)
@@ -43,15 +45,15 @@ class todolist:
 
     def remove_task(self, task_or_id):
         """
-        移除任務（支持字符串文本或任務 ID）
+        Remove a task from the list using its unique ID, its text content, or the task object itself.
 
         Args:
-            task_or_id: 任務文本、任務字典或任務 ID
+            task_or_id: Can be the task's unique ID string, the task text string, or the task dictionary.
 
         Returns:
-            str: 確認訊息
+            str: A message confirming which task was removed, or stating that it wasn't found.
         """
-        # 嘗試按 ID 查找
+        # Check if the input is a string, which could be either a task ID or the task text.
         if isinstance(task_or_id, str):
             for task in self.tasks:
                 if isinstance(task, dict) and task.get('id') == task_or_id:
@@ -60,12 +62,12 @@ class todolist:
                 elif isinstance(task, str) and task == task_or_id:
                     self.tasks.remove(task)
                     return f'Task "{task}" removed.'
-        # 如果是字典，直接比較
+        # If the input is a dictionary object, try to find and remove that exact object from the list.
         elif isinstance(task_or_id, dict) and task_or_id in self.tasks:
             self.tasks.remove(task_or_id)
             return f'Task "{task_or_id["text"]}" removed.'
 
-        return f'Task not found.'
+        return 'Task not found.'
 
     def remove_task_by_index(self, index):
         if 0 <= index < len(self.tasks):
@@ -81,28 +83,29 @@ class todolist:
         if not self.tasks:
             return "No tasks in the list."
         else:
-            # 為向後兼容，返回純文本列表（舊版本兼容）
+            # Return a list of task descriptions. For dictionary-based tasks, extract the text;
+            # for legacy string tasks, use them directly. This ensures backward compatibility.
             return [task['text'] if isinstance(task, dict) else task for task in self.tasks]
 
     def get_scheduled_tasks(self):
         """
-        獲取所有預定通知的任務
+        Retrieve a list of all tasks that have a scheduled notification time.
 
         Returns:
-            list: 預定任務列表
+            list: A list containing only the task dictionaries that include a 'notification_time'.
         """
         return [task for task in self.tasks
                 if isinstance(task, dict) and task.get('notification_time')]
 
     def get_task_by_id(self, task_id):
         """
-        根據 ID 獲取任務
+        Search for and return a task dictionary based on its unique ID.
 
         Args:
-            task_id: 任務 ID
+            task_id: The unique identifier string of the task.
 
         Returns:
-            dict or None: 任務字典或未找到時返回 None
+            dict or None: The task dictionary if found, otherwise None.
         """
         for task in self.tasks:
             if isinstance(task, dict) and task.get('id') == task_id:
@@ -112,8 +115,8 @@ class todolist:
 
 class NotificationScheduler:
     """
-    通知調度器 - 負責管理和觸發定時通知
-    單例模式實現，確保全局只有一個調度器實例
+    Notification Scheduler - Responsible for managing and triggering scheduled notifications.
+    This class is implemented as a Singleton to ensure only one scheduler instance exists globally within the application.
     """
     _instance = None
     _lock = threading.Lock()
@@ -127,56 +130,65 @@ class NotificationScheduler:
 
     def __init__(self):
         if not hasattr(self, 'initialized'):
-            self.scheduled_notifications = {}  # {task_id: (threading.Timer, task)}
+            # A dictionary to store active scheduled notifications, mapping task IDs to a tuple of (timer object, task text).
+            self.scheduled_notifications = {}
             self.notification_queue = queue.Queue()
+            self.fallback_handler = None
             self.running = True
             self.daemon_thread = threading.Thread(target=self._notification_daemon, daemon=True)
             self.daemon_thread.start()
             self.initialized = True
 
+    def set_fallback_handler(self, handler):
+        """
+        Set a fallback handler function for notifications.
+        This is primarily used to handle UI-related callbacks in the main GUI thread, ensuring thread safety when updating the interface.
+        """
+        self.fallback_handler = handler
+
     def schedule_notification(self, task_id, notification_time, task_text):
         """
-        調度通知
+        Schedule a notification for a specific task at a given time.
 
         Args:
-            task_id: 任務 ID
-            notification_time: 通知時間 (datetime)
-            task_text: 任務文本
+            task_id: The unique identifier of the task.
+            notification_time: The datetime object representing when the notification should occur.
+            task_text: The text content of the task to be displayed in the notification.
 
         Returns:
-            bool: 是否成功調度
+            bool: True if the scheduling was successful.
         """
         if task_id in self.scheduled_notifications:
-            # 如果已經存在，先取消舊的通知
+            # If a notification is already scheduled for this task, cancel the old one before setting the new one.
             self.cancel_notification(task_id)
 
-        # 計算延遲時間
+        # Calculate the time delay until the notification should fire.
         now = dt.datetime.now()
         if notification_time <= now:
-            # 如果通知時間已過，立即觸發
+            # If the scheduled time is in the past, trigger the notification immediately.
             self._trigger_notification(task_id, task_text)
             return True
 
         delay = (notification_time - now).total_seconds()
 
-        # 創建定時器
+        # Create a background timer thread that will call the trigger function after the calculated delay.
         timer = threading.Timer(delay, self._trigger_notification, args=[task_id, task_text])
         timer.daemon = True
         timer.start()
 
-        # 儲存調度信息
+        # Store the timer and task details in the dictionary for future reference or cancellation.
         self.scheduled_notifications[task_id] = (timer, task_text)
         return True
 
     def cancel_notification(self, task_id):
         """
-        取消通知
+        Cancel a currently scheduled notification for a specific task.
 
         Args:
-            task_id: 任務 ID
+            task_id: The unique identifier of the task whose notification should be cancelled.
 
         Returns:
-            bool: 是否成功取消
+            bool: True if a notification was found and cancelled, False otherwise.
         """
         if task_id in self.scheduled_notifications:
             timer, task_text = self.scheduled_notifications[task_id]
@@ -187,57 +199,60 @@ class NotificationScheduler:
 
     def _trigger_notification(self, task_id, task_text):
         """
-        觸發通知的內部方法
+        Internal method called when the timer expires to trigger the notification.
 
         Args:
-            task_id: 任務 ID
-            task_text: 任務文本
+            task_id: The unique identifier of the task.
+            task_text: The text content of the task.
         """
-        # 將通知放入佇列，由守護線程處理
+        # Place the notification details into a thread-safe queue.
+        # The daemon thread will pick this up and handle the actual display of the notification.
         self.notification_queue.put({
             'task_id': task_id,
             'task_text': task_text,
             'timestamp': dt.datetime.now()
         })
 
-        # 清理已觸發的通知
+        # Remove the task from the list of active scheduled notifications as it has now been triggered.
         if task_id in self.scheduled_notifications:
             del self.scheduled_notifications[task_id]
 
     def _notification_daemon(self):
         """
-        通知守護線程 - 負責顯示通知
+        Background daemon thread function that continuously monitors the queue for pending notifications.
+        It is responsible for displaying notifications as they arrive.
         """
         while self.running:
             try:
-                # 等待通知，超時 1 秒檢查 running 狀態
+                # Wait for a new notification item in the queue. Use a 1-second timeout to allow periodic checking of the 'running' flag.
                 notification = self.notification_queue.get(timeout=1)
                 self._show_notification(notification)
                 self.notification_queue.task_done()
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"通知錯誤: {e}")
+                print(f"Notification error: {e}")
 
     def _show_notification(self, notification):
         """
-        顯示 Apple 風格的通知
+        Display the notification to the user. On macOS, it attempts to use native system notifications.
 
         Args:
-            notification: 通知字典
+            notification: A dictionary containing details of the notification to display.
         """
         try:
-            # 在 macOS 上使用 osascript 發送系統通知
+            # Import necessary modules for running system commands and checking the OS platform.
             import subprocess
             import platform
 
             if platform.system() == "Darwin":  # macOS
-                title = "備忘錄提醒"
-                message = f"提醒：{notification['task_text']}"
-                sound = "Glass"  # Apple 系統音效
+                title = "Reminder"
+                message = f"Reminder: {notification['task_text']}"
+                sound = "Glass"  # Default Apple system sound
 
+                # AppleScript command to display a native notification.
                 script = f'''
-                display notification "{message}" with title "{title}" subtitle "定時提醒" sound name "{sound}"
+                display notification "{message}" with title "{title}" subtitle "Scheduled Reminder" sound name "{sound}"
                 '''
 
                 result = subprocess.run(
@@ -246,44 +261,53 @@ class NotificationScheduler:
                     text=True,
                     timeout=5
                 )
-                if result.returncode != 0:
-                    # 降級到 tkMessageBox
-                    self._fallback_notification(notification)
+                # Even if the system notification is sent, also show the in-app GUI notification as a fallback/confirmation.
+                self._fallback_notification(notification)
             else:
-                # 其他平台使用備用方案
+                # For non-macOS platforms, strictly use the fallback (GUI) notification method.
                 self._fallback_notification(notification)
 
         except Exception as e:
-            print(f"通知發送失敗: {e}")
-            # 最終備用方案
+            print(f"Failed to send notification: {e}")
+            # If an error occurs (e.g., osascript fails), default to the fallback method.
             self._fallback_notification(notification)
 
     def _fallback_notification(self, notification):
         """
-        備用通知方案（使用 messagebox）
+        Fallback notification method using a Tkinter message box or console output.
+        This is used when system notifications are unavailable or fail.
 
         Args:
-            notification: 通知字典
+            notification: A dictionary containing details of the notification.
         """
-        # 檢查是否有 tkinter root 實例
+        # If an external handler is provided (e.g., to handle UI updates on the main thread), use it first.
+        # This helps avoid thread-safety issues with Tkinter.
+        if self.fallback_handler:
+            try:
+                self.fallback_handler(notification)
+                return
+            except Exception as e:
+                print(f"External notification handler failed: {e}")
+
+        # If no handler or it failed, try to use Tkinter directly.
         try:
             import tkinter as tk
             from tkinter import messagebox
 
-            # 嘗試找到現有的 root 窗口
+            # Attempt to find an existing Tkinter root window.
             for widget in tk._default_root.winfo_children():
                 if isinstance(widget, tk.Tk):
                     root = widget
                     break
             else:
-                # 如果找不到，創建一個临時窗口
+                # If no root window exists, create a temporary one for the message box.
                 root = tk.Tk()
-                root.withdraw()  # 隱藏窗口
+                root.withdraw()  # Hide the temporary window.
                 cleanup_root = True
 
             messagebox.showinfo(
-                "備忘錄提醒",
-                f"提醒：{notification['task_text']}",
+                "Reminder",
+                f"Reminder: {notification['task_text']}",
                 parent=root if not cleanup_root else None
             )
 
@@ -291,31 +315,31 @@ class NotificationScheduler:
                 root.destroy()
 
         except Exception:
-            # 最終備用 - 控制台輸出
-            print(f"=== 備忘錄提醒 ===")
-            print(f"提醒：{notification['task_text']}")
-            print(f"時間：{notification['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+            # Ultimate fallback: print the notification to the console if all else fails.
+            print("=== Reminder ===")
+            print(f"Message: {notification['task_text']}")
+            print(f"Time: {notification['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
             print("=" * 20)
 
     def get_scheduled_count(self):
         """
-        獲取已調度的通知數量
+        Get the total number of currently scheduled notifications.
 
         Returns:
-            int: 調度中的通知數量
+            int: The count of active scheduled notifications.
         """
         return len(self.scheduled_notifications)
 
     def get_all_scheduled(self):
         """
-        獲取所有已調度的通知信息
+        Retrieve detailed information about all currently scheduled notifications.
 
         Returns:
-            list: 調度信息列表
+            list: A list of dictionaries, each containing the task ID, text, and remaining time in seconds.
         """
         result = []
         for task_id, (timer, task_text) in self.scheduled_notifications.items():
-            # 獲取剩餘時間
+            # Calculate the remaining time until the notification triggers.
             try:
                 remaining_time = timer.interval - timer.finished.wait(0)
                 remaining_time = max(0, remaining_time)
@@ -325,21 +349,22 @@ class NotificationScheduler:
                     'remaining_seconds': remaining_time
                 })
             except:
-                # 如果計時器已經完成，跳過
+                # If the timer has finished or an error occurs, skip this item.
                 continue
         return result
 
     def shutdown(self):
         """
-        關閉調度器
+        Gracefully shut down the scheduler.
+        Stops the daemon thread and cancels all pending notifications.
         """
         self.running = False
 
-        # 取消所有調度的通知
+        # Cancel all currently scheduled notifications.
         for task_id in list(self.scheduled_notifications.keys()):
             self.cancel_notification(task_id)
 
-        # 等待守護線程結束
+        # Wait for the daemon thread to finish execution, with a timeout to prevent hanging.
         if self.daemon_thread.is_alive():
             self.daemon_thread.join(timeout=2)
 
@@ -348,49 +373,96 @@ if __name__ == "__main__":
     import tkinter as tk
     from tkinter import ttk, messagebox
 
+    class ScrollableFrame(ttk.Frame):
+        """
+        A custom scrollable container that supports complex widgets within rows.
+        This component replaces the standard Listbox, allowing for more flexible layouts and richer content.
+        """
+        def __init__(self, container, *args, **kwargs):
+            # Initialize the frame. If a style dictionary is provided, extract the background color
+            # to apply it to the underlying canvas, ensuring a consistent look.
+            bg_color = '#FFFFFF'
+            if 'style' in kwargs and isinstance(kwargs['style'], dict):
+                style_config = kwargs.pop('style')
+                bg_color = style_config.get('background', '#FFFFFF')
+            
+            super().__init__(container, *args, **kwargs)
+            
+            # Create a Canvas to hold the content and a vertical Scrollbar for navigation.
+            self.canvas = tk.Canvas(self, highlightthickness=0, bg=bg_color)
+            self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+            self.scrollable_frame = ttk.Frame(self.canvas)
+
+            # Configure the scroll region whenever the inner frame size changes (e.g., adding/removing tasks).
+            self.scrollable_frame.bind(
+                "<Configure>",
+                lambda e: self.canvas.configure(
+                    scrollregion=self.canvas.bbox("all")
+                )
+            )
+
+            # Embed the scrollable frame inside the canvas.
+            self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+            # Link the canvas scrolling to the scrollbar.
+            self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+            # Layout the canvas and scrollbar using pack geometry manager.
+            self.canvas.pack(side="left", fill="both", expand=True)
+            self.scrollbar.pack(side="right", fill="y")
+            
+            # Bind mouse wheel events for intuitive scrolling.
+            self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+            
+        def _on_mousewheel(self, event):
+            # Handle mouse wheel scrolling, but only if the canvas is currently visible on screen.
+            if self.canvas.winfo_ismapped():
+                self.canvas.yview_scroll(int(-1*(event.delta)), "units")
+
     class TodoListGUI:
         def __init__(self, root):
             self.root = root
             self.todolist = todolist()
-            # 初始化通知調度器
+            # Initialize the notification scheduler and set up the thread-safe fallback handler
             self.notification_scheduler = NotificationScheduler()
+            self.notification_scheduler.set_fallback_handler(self.handle_fallback_notification)
 
-            # 定義Apple風格的色彩系統
+            # Define a color palette inspired by Apple's Human Interface Guidelines
             self.colors = {
-                'bg': '#F2F2F7',          # 淺灰背景 (Apple系統灰)
-                'card': '#FFFFFF',        # 卡片白
-                'primary': '#007AFF',     # Apple藍
-                'text': '#1D1D1F',        # 深灰文字 (Apple常用)
-                'secondary_text': '#8E8E93', # 次要文字
-                'border': '#C6C6C8',      # 邊框灰
-                'hover': '#E5E5EA',       # 懸停灰
-                'selected': '#E5F2FF',    # 選中藍
-                'delete': '#FF3B30',      # 刪除紅 (Apple紅)
-                'success': '#34C759'      # 成功綠 (Apple綠)
+                'bg': '#F2F2F7',          # Light gray system background
+                'card': '#FFFFFF',        # Pure white for card-like elements
+                'primary': '#007AFF',     # Standard Apple Blue
+                'text': '#1D1D1F',        # Dark gray for primary text
+                'secondary_text': '#8E8E93', # Lighter gray for secondary text
+                'border': '#C6C6C8',      # Gray for borders
+                'hover': '#E5E5EA',       # Light gray for hover states
+                'selected': '#E5F2FF',    # Very light blue for selection
+                'delete': '#FF3B30',      # System Red for destructive actions
+                'success': '#34C759'      # System Green for success actions
             }
 
-            # 設置窗口
-            self.root.title("備忘錄")
-            self.root.geometry("480x640")
-            self.root.minsize(320, 480)  # 設置最小尺寸
-            self.root.resizable(True, True)  # 允許調整窗口大小
+            # Configure the main application window
+            self.root.title("Reminders")
+            self.root.geometry("600x640")
+            self.root.minsize(550, 480)  # Set minimum window dimensions
+            self.root.resizable(True, True)  # Allow the user to resize the window
 
-            # 應用Apple風格樣式
+            # Configure ttk styles to match the Apple aesthetic
             self.style = ttk.Style()
             self.style.theme_use("clam")
 
-            # 框架樣式
+            # Frame Styles
             self.style.configure("TFrame", background=self.colors['bg'])
 
-            # 標籤樣式 - Apple字體風格
+            # Label Styles - Using SF Pro Text if available
             self.style.configure(
                 "TLabel",
                 background=self.colors['bg'],
                 foreground=self.colors['text'],
-                font=("SF Pro Text", 13)  # Prefer SF Pro if available, fallback to Helvetica Neue
+                font=("SF Pro Text", 13)  # Fallback to system default if SF Pro is missing
             )
 
-            # 標題樣式
+            # Header Label Style
             self.style.configure(
                 "Header.TLabel",
                 font=("SF Pro Display", 28, "bold"),
@@ -398,7 +470,7 @@ if __name__ == "__main__":
                 foreground=self.colors['text']
             )
 
-            # 次要文字樣式
+            # Secondary Text Style
             self.style.configure(
                 "Secondary.TLabel",
                 font=("SF Pro Text", 11),
@@ -406,13 +478,13 @@ if __name__ == "__main__":
                 foreground=self.colors['secondary_text']
             )
 
-            # 卡片樣式
+            # Card Style for container elements
             self.style.configure(
                 "Card.TFrame",
                 background=self.colors['card']
             )
 
-            # 主要按鈕樣式 - Apple風格
+            # Primary Button Style - Bold white text on blue background
             self.style.configure(
                 "Primary.TButton",
                 background=self.colors['primary'],
@@ -427,11 +499,11 @@ if __name__ == "__main__":
                 background=[("active", "#0051D5"), ("pressed", "#0047B9")]
             )
 
-            # 次要按鈕樣式
+            # Secondary Button Style - Blue text on white/clear background
             self.style.configure(
                 "Secondary.TButton",
                 background=self.colors['card'],
-                foreground=self.colors['primary'], # Secondary actions often use Primary color in iOS
+                foreground=self.colors['primary'], # Mimics iOS secondary action buttons
                 borderwidth=0,
                 font=("SF Pro Text", 13),
                 padding=(16, 8)
@@ -442,455 +514,390 @@ if __name__ == "__main__":
                 foreground=[("active", self.colors['primary'])]
             )
 
-            # 輸入框樣式
+            # Success Button Style (Checkmark)
+            self.style.configure(
+                "Success.TButton",
+                background=self.colors['success'],
+                foreground="white",
+                borderwidth=0,
+                font=("SF Pro Text", 13, "bold"),
+                padding=(8, 4)
+            )
+            self.style.map(
+                "Success.TButton",
+                background=[("active", "#28a745"), ("pressed", "#218838")]
+            )
+
+            # Entry Field Style
             self.style.configure(
                 "TEntry",
                 font=("SF Pro Text", 15),
                 padding=(12, 12),
                 borderwidth=0
             )
+            
+            # Combobox Style
+            self.style.configure(
+                "TCombobox",
+                font=("SF Pro Text", 15),
+                padding=(12, 12),
+                borderwidth=0
+            )
 
-            # 創建主框架 - Apple風格的內邊距
+            # Create the main container frame with generous padding
             self.main_frame = ttk.Frame(root, padding="24")
             self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
             root.columnconfigure(0, weight=1)
             root.rowconfigure(0, weight=1)
 
-            # 設置窗口背景色
+            # Set the root window background color
             self.root.configure(bg=self.colors['bg'])
-
-            # 綁定點擊事件來清除選取 - 點擊主框架空白區域時觸發
-            self.main_frame.bind("<Button-1>", self.on_window_click)
 
             self.create_widgets()
 
+        def handle_fallback_notification(self, notification):
+            """
+            Handle fallback notifications by scheduling them to run on the main GUI thread.
+            This ensures thread safety when showing message boxes from background threads.
+            """
+            self.root.after(0, lambda: self._show_safe_messagebox(notification))
+
+        def _show_safe_messagebox(self, notification):
+            # Display the message box. This method is designed to be called via root.after from the main thread.
+            messagebox.showinfo(
+                "Reminder",
+                f"Reminder: {notification['task_text']}"
+            )
+
         def create_widgets(self):
-            # 標題
+            # Header Title
             title_label = ttk.Label(
-                self.main_frame, text="我的備忘錄", style="Header.TLabel"
+                self.main_frame, text="My Reminders", style="Header.TLabel"
             )
             title_label.grid(row=0, column=0, columnspan=3, pady=(0, 32), sticky=tk.W)
 
-            # 輸入區域框架
+            # Input Area Container
             input_frame = ttk.Frame(self.main_frame)
             input_frame.grid(
                 row=1, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N), pady=(0, 24)
             )
             input_frame.columnconfigure(0, weight=1)
 
-            # 任務輸入框 - Apple風格的圓角
+            # Task Entry Field - Styled with rounded corners (via style configuration)
             self.task_entry = ttk.Entry(input_frame, style="TEntry")
             self.task_entry.grid(row=0, column=0, columnspan=2, padx=(0, 12), sticky=(tk.W, tk.E, tk.N))
             self.task_entry.bind("<Return>", lambda e: self.add_task_input())
 
-            # 定時通知按鈕
+            # Schedule Button (Alarm Clock Icon)
             self.schedule_button = ttk.Button(
                 input_frame, text="⏰", command=self.show_datetime_picker, width=3, style="Secondary.TButton"
             )
             self.schedule_button.grid(row=0, column=2, sticky=(tk.N, tk.E), padx=(0, 8))
 
-            # 添加按鈕
+            # Add Button
             add_button = ttk.Button(
-                input_frame, text="新增", command=self.add_task_input, style="Primary.TButton"
+                input_frame, text="Add", command=self.add_task_input, style="Primary.TButton"
             )
             add_button.grid(row=0, column=3, sticky=(tk.N, tk.E))
 
-            # 日期時間選擇框架（隱藏預設）
+            # DateTime Picker Container (Initially hidden)
             self.datetime_frame = ttk.Frame(self.main_frame)
             self.datetime_frame.grid(
                 row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 24)
             )
             self.datetime_frame.columnconfigure(1, weight=1)
-            self.datetime_frame.grid_remove()  # 初始隱藏
+            self.datetime_frame.grid_remove()  # Start hidden
 
-            # 日期選擇標籤
-            date_label = ttk.Label(self.datetime_frame, text="提醒日期時間:", style="Secondary.TLabel")
+            # Date Picker Label
+            date_label = ttk.Label(self.datetime_frame, text="Reminder Time:", style="Secondary.TLabel")
             date_label.grid(row=0, column=0, padx=(0, 8), sticky=tk.W)
 
-            # 日期時間輸入框
-            self.datetime_var = tk.StringVar(value="")
-            self.datetime_entry = ttk.Entry(self.datetime_frame, textvariable=self.datetime_var, width=25)
-            self.datetime_entry.grid(row=0, column=1, padx=(0, 8), sticky=(tk.W, tk.E))
-            self.datetime_entry.bind("<KeyRelease>", self.validate_datetime_input)
-            self.datetime_entry.bind("<FocusOut>", self.parse_datetime)
+            # Selection Controls - 5 Comboboxes for Year, Month, Day, Hour, Minute
+            self.selection_frame = ttk.Frame(self.datetime_frame)
+            self.selection_frame.grid(row=0, column=1, padx=(0, 8), sticky=(tk.W, tk.E))
+            
+            # Initialize Time Variables
+            current_dt = dt.datetime.now()
+            self.year_var = tk.StringVar(value=str(current_dt.year))
+            self.month_var = tk.StringVar(value=f"{current_dt.month:02d}")
+            self.day_var = tk.StringVar(value=f"{current_dt.day:02d}")
+            self.hour_var = tk.StringVar(value=f"{current_dt.hour:02d}")
+            self.minute_var = tk.StringVar(value=f"{current_dt.minute:02d}")
+            
+            # Year Selector
+            self.year_cb = ttk.Combobox(self.selection_frame, textvariable=self.year_var, width=5, state="readonly")
+            self.year_cb['values'] = [str(y) for y in range(current_dt.year, current_dt.year + 11)]
+            self.year_cb.grid(row=0, column=0)
+            self.year_cb.bind("<<ComboboxSelected>>", self.update_days)
+            
+            ttk.Label(self.selection_frame, text="/", style="Secondary.TLabel").grid(row=0, column=1, padx=2)
+            
+            # Month Selector
+            self.month_cb = ttk.Combobox(self.selection_frame, textvariable=self.month_var, width=3, state="readonly")
+            self.month_cb['values'] = [f"{m:02d}" for m in range(1, 13)]
+            self.month_cb.grid(row=0, column=2)
+            self.month_cb.bind("<<ComboboxSelected>>", self.update_days)
+            
+            ttk.Label(self.selection_frame, text="/", style="Secondary.TLabel").grid(row=0, column=3, padx=2)
 
-            # 清除按鈕
-            clear_datetime_button = ttk.Button(
-                self.datetime_frame, text="✖", command=self.clear_datetime, width=3
+            # Day Selector
+            self.day_cb = ttk.Combobox(self.selection_frame, textvariable=self.day_var, width=3, state="readonly")
+            self.day_cb.grid(row=0, column=4)
+            # Note: Day values are populated dynamically by update_days()
+            
+            # Spacer
+            ttk.Label(self.selection_frame, text="  ", style="Secondary.TLabel").grid(row=0, column=5)
+            
+            # Hour Selector
+            self.hour_cb = ttk.Combobox(self.selection_frame, textvariable=self.hour_var, width=3, state="readonly")
+            self.hour_cb['values'] = [f"{h:02d}" for h in range(24)]
+            self.hour_cb.grid(row=0, column=6)
+            
+            # Separator
+            ttk.Label(self.selection_frame, text=":", style="Secondary.TLabel").grid(row=0, column=7, padx=2)
+            
+            # Minute Selector
+            self.minute_cb = ttk.Combobox(self.selection_frame, textvariable=self.minute_var, width=3, state="readonly")
+            self.minute_cb['values'] = [f"{m:02d}" for m in range(60)]
+            self.minute_cb.grid(row=0, column=8)
+            
+            # Reset Button
+            reset_btn = ttk.Button(
+                self.selection_frame, 
+                text="↺", 
+                width=3, 
+                command=self.clear_datetime, 
+                style="Secondary.TButton"
             )
-            clear_datetime_button.grid(row=0, column=2)
+            reset_btn.grid(row=0, column=9, padx=(12, 0))
+            
+            # Populate days for the initial selection
+            self.update_days()
 
-            # 選定的日期時間
+            # Variable to store the final selected datetime object
             self.selected_datetime = None
 
-            # 任務列表框架 - Apple風格的卡片
-            # Use Card.TFrame for white background
+            # Task List Container - Styled as a card with white background
             list_frame = ttk.Frame(self.main_frame, style="Card.TFrame", padding=10)
             list_frame.grid(
                 row=3, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 24)
             )
-            self.main_frame.rowconfigure(3, weight=1)  # 列表框架可以擴展
-            self.main_frame.columnconfigure(0, weight=1)  # 確保主框架可以擴展
+            self.main_frame.rowconfigure(3, weight=1)  # Allow the list area to expand vertically
+            self.main_frame.columnconfigure(0, weight=1)  # Allow the list area to expand horizontally
             list_frame.columnconfigure(0, weight=1)
             list_frame.rowconfigure(0, weight=1)
 
-            # 任務列表 (自定義樣式的Listbox)
-            self.task_listbox = tk.Listbox(
-                list_frame,
-                font=("SF Pro Text", 15),
-                bd=0,
-                highlightthickness=0,
-                selectmode=tk.SINGLE,
-                bg=self.colors['card'],
-                fg=self.colors['text'],
-                selectbackground=self.colors['selected'],
-                selectforeground=self.colors['primary'],
-                activestyle='none',
-                relief='flat',
-                exportselection=False,
-            )
-            self.task_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-            # 確保列表框可以擴展
-            self.task_listbox.config(width=0)  # 讓寬度自動適應
-
-            # 滾動條 - Apple風格
-            scrollbar = ttk.Scrollbar(
-                list_frame, orient=tk.VERTICAL, command=self.task_listbox.yview
-            )
-            scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-            self.task_listbox.configure(yscrollcommand=scrollbar.set)
-
-            # 按鈕框架
+            # Custom Scrollable List Component
+            self.task_list = ScrollableFrame(list_frame, style={'background': self.colors['card']})
+            self.task_list.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+            
+            # Bottom Action Button Frame
             button_frame = ttk.Frame(self.main_frame)
             button_frame.grid(row=4, column=0, columnspan=3, pady=(0, 16))
 
-            # 刪除按鈕
-            delete_button = ttk.Button(
-                button_frame, text="刪除選中備忘", command=self.delete_selected_task, style="Secondary.TButton"
-            )
-            delete_button.grid(row=0, column=0, padx=(0, 10))
-
-            # 清空按鈕
+            # Clear All Button
             clear_button = ttk.Button(
                 button_frame,
-                text="清空所有",
+                text="Clear All",
                 command=self.clear_all_tasks,
                 style="Secondary.TButton"
             )
             clear_button.grid(row=0, column=1, padx=(0, 10))
 
-            # 通知管理按鈕
-            notification_button = ttk.Button(
-                button_frame,
-                text="📅 通知管理",
-                command=self.show_notification_manager,
-                style="Secondary.TButton"
-            )
-            notification_button.grid(row=0, column=2)
 
-            # 統計標籤
+            # Status Bar Label
             self.status_label = ttk.Label(
-                self.main_frame, text="共 0 項備忘", style="Secondary.TLabel"
+                self.main_frame, text="0 Reminders", style="Secondary.TLabel"
             )
             self.status_label.grid(
                 row=5, column=0, columnspan=3, pady=(12, 0), sticky=tk.W
             )
+            
+            # Perform initial data load
+            self.refresh_task_list()
+
+        def refresh_task_list(self):
+            """Refresh the task list view"""
+            # Clear existing widgets in scrollable frame
+            for widget in self.task_list.scrollable_frame.winfo_children():
+                widget.destroy()
+                
+            # Re-populate
+            for task in self.todolist.tasks:
+                self.create_task_row(task)
+                
+            self.update_status()
+
+        def create_task_row(self, task):
+            """Render a single task row in the list."""
+            # Normalize the task data: if it's a legacy string task, convert it to a dictionary format on the fly.
+            if isinstance(task, str):
+                task_data = {'text': task, 'id': str(uuid.uuid4()), 'notification_time': None}
+            else:
+                task_data = task
+            
+            row_frame = ttk.Frame(self.task_list.scrollable_frame, style="Card.TFrame")
+            row_frame.pack(fill="x", expand=True, pady=2)
+            
+            # Prepare display text
+            text = task_data['text']
+            notif_time = task_data.get('notification_time')
+            
+            # Check if the task is overdue
+            is_overdue = False
+            if notif_time and notif_time < dt.datetime.now():
+                is_overdue = True
+                
+            if notif_time:
+                time_str = notif_time.strftime("%m/%d %H:%M")
+                text = f"{text} (⏰ {time_str})"
+                
+            # Use a content frame to manage layout margins
+            content_frame = ttk.Frame(row_frame, style="Card.TFrame")
+            content_frame.pack(side="left", fill="both", expand=True, padx=5)
+            
+            # Use a standard tk.Label for specific text coloring (red if overdue)
+            task_label = tk.Label(
+                content_frame, 
+                text=text, 
+                bg=self.colors['card'],
+                fg=self.colors['delete'] if is_overdue else self.colors['text'],
+                font=("SF Pro Text", 15),
+                anchor="w",
+                justify="left"
+            )
+            task_label.pack(side="left", fill="x", expand=True)
+            
+            # Complete Button (Checkmark)
+            complete_btn = ttk.Button(
+                row_frame,
+                text="✓",
+                width=3,
+                style="Success.TButton",
+                command=lambda t=task_data: self.complete_task(t)
+            )
+            complete_btn.pack(side="right", padx=5)
+
+        def complete_task(self, task):
+            """
+            Mark a task as completed.
+            This removes the task from the list and cancels any associated notifications.
+            """
+            task_id = task.get('id')
+            if task_id:
+                # Cancel any scheduled notification for this task
+                self.notification_scheduler.cancel_notification(task_id)
+                # Remove the task data from the model
+                self.todolist.remove_task(task)
+                # Refresh the UI to reflect changes
+                self.refresh_task_list()
 
         def add_task_input(self):
             task = self.task_entry.get().strip()
             if task:
-                # 添加任務，如果設定了通知時間則一併傳遞
-                message = self.todolist.add_task(task, self.selected_datetime)
+                # Check if the date picker is visible and retrieve the scheduled time if so.
+                notification_time = None
+                if self.datetime_frame.winfo_ismapped():
+                    notification_time = self.get_selected_datetime()
 
-                # 如果有通知時間，調度通知
-                if self.selected_datetime:
-                    task_dict = self.todolist.tasks[-1]  # 獲取剛才添加的任務
+                # Add the task to the logic model
+                self.todolist.add_task(task, notification_time)
+
+                # If a notification time was set, schedule the notification via the scheduler
+                if notification_time:
+                    task_dict = self.todolist.tasks[-1]  # Get the newly added task dictionary
                     self.notification_scheduler.schedule_notification(
                         task_dict['id'],
-                        self.selected_datetime,
+                        notification_time,
                         task
                     )
 
-                # 顯示在列表中
-                self.display_task_in_list(task, self.selected_datetime)
+                # Update the display
+                self.refresh_task_list()
 
-                # 清空輸入和重置狀態
+                # Reset the input fields and UI state
                 self.task_entry.delete(0, tk.END)
                 self.clear_datetime()
                 self.datetime_frame.grid_remove()
                 self.update_status()
                 self.task_entry.focus()
 
-        def clear_selection(self, event=None):
-            """清除列表選取狀態"""
-            try:
-                self.task_listbox.selection_clear(0, tk.END)
-            except:
-                pass
-
-        def on_window_click(self, event):
-            """點擊主框架空白區域時清除選取"""
-            # 如果直接點擊在主框架上（空白區域），清除選取
-            if event.widget == self.main_frame:
-                self.clear_selection()
-
-        def delete_selected_task(self):
-            # 如果當前沒有選取項目，但列表中有項目，默認選中第一個
-            selection = self.task_listbox.curselection()
-            if not selection and self.task_listbox.size() > 0:
-                selection = (0,)  # 選中第一個項目
-                self.task_listbox.selection_set(0)
-            elif not selection:
-                messagebox.showinfo("提示", "沒有可刪除的備忘")
-                return
-
-            if selection:
-                index = selection[0]
-                task_text = self.task_listbox.get(index).strip()
-
-                # 確保項目在視圖中可見
-                self.task_listbox.see(index)
-
-                # 確認對話框
-                result = messagebox.askyesno(
-                    "確認刪除", f"確定要刪除此備忘嗎？\n\n{task_text}"
-                )
-                if result:
-                    self.todolist.remove_task_by_index(index)
-                    self.task_listbox.delete(index)
-                    self.update_status()
-                    # 清除選取狀態
-                    self.clear_selection()
-
         def clear_all_tasks(self):
-            if self.task_listbox.size() > 0:
-                result = messagebox.askyesno("確認", "確定要清空所有備忘嗎？")
+            if len(self.todolist.tasks) > 0:
+                # Ask for user confirmation before clearing everything
+                result = messagebox.askyesno("Confirm", "Are you sure you want to clear all reminders?")
                 if result:
-                    self.task_listbox.delete(0, tk.END)
+                    # Cancel all scheduled notifications first
+                    for task in self.todolist.tasks:
+                        if isinstance(task, dict) and task.get('id'):
+                            self.notification_scheduler.cancel_notification(task['id'])
+
+                    # Clear the data model
                     self.todolist.tasks = []
-                    self.update_status()
+                    # Refresh the UI
+                    self.refresh_task_list()
 
         def update_status(self):
-            count = self.task_listbox.size()
-            self.status_label.config(text=f"共 {count} 項備忘")
+            count = len(self.todolist.tasks)
+            self.status_label.config(text=f"{count} Reminders")
 
         def show_datetime_picker(self):
-            """顯示/隱藏日期時間選擇器"""
+            """Toggle the visibility of the date/time picker panel."""
             if self.datetime_frame.winfo_ismapped():
                 self.datetime_frame.grid_remove()
             else:
                 self.datetime_frame.grid()
-                self.datetime_entry.focus()
+                self.year_cb.focus()
 
         def clear_datetime(self):
-            """清除選定的日期時間"""
-            self.selected_datetime = None
-            self.datetime_var.set("")
+            """Reset the date/time picker variables to the current time."""
+            now = dt.datetime.now()
+            self.year_var.set(str(now.year))
+            self.month_var.set(f"{now.month:02d}")
+            self.day_var.set(f"{now.day:02d}")
+            self.hour_var.set(f"{now.hour:02d}")
+            self.minute_var.set(f"{now.minute:02d}")
+            self.update_days()
 
-        def display_task_in_list(self, task_text, notification_time=None):
-            """在列表中顯示任務，支持顯示通知時間"""
-            if notification_time:
-                time_str = notification_time.strftime("%m/%d %H:%M")
-                display_text = f"  ⏰ {task_text} ({time_str})"
-            else:
-                display_text = f"  {task_text}"
-
-            self.task_listbox.insert(tk.END, display_text)
-
-        def validate_datetime_input(self, event):
-            """驗證日期時間輸入格式即時提示"""
-            input_text = self.datetime_var.get().strip()
-
-            if not input_text:
-                self.datetime_entry.config(foreground=self.colors['text'])
-                return
-
-            # 簡單的格式提示 (支持 MM/DD HH:MM 或 YYYY/MM/DD HH:MM)
-            patterns = [
-                r'\d{1,2}/\d{1,2} \d{1,2}:\d{2}$',      # MM/DD HH:MM
-                r'\d{4}/\d{1,2}/\d{1,2} \d{1,2}:\d{2}$', # YYYY/MM/DD HH:MM
-            ]
-
-            import re
-            if any(re.match(pattern, input_text) for pattern in patterns):
-                self.datetime_entry.config(foreground=self.colors['success'])
-            else:
-                self.datetime_entry.config(foreground=self.colors['delete'])
-
-        def parse_datetime(self, event=None):
-            """解析日期時間輸入並設定為選定時間"""
-            input_text = self.datetime_var.get().strip()
-
-            if not input_text:
-                self.selected_datetime = None
-                return
-
+        def update_days(self, event=None):
+            """Dynamically update the 'Day' dropdown options based on the selected Year and Month."""
             try:
-                # 嘗試不同的日期時間格式
-                formats = [
-                    "%m/%d %H:%M",
-                    "%m/%d %H:%M:%S",
-                    "%Y/%m/%d %H:%M",
-                    "%Y/%m/%d %H:%M:%S",
-                    "%m-%d %H:%M",
-                    "%m-%d %H:%M:%S",
-                    "%Y-%m-%d %H:%M",
-                    "%Y-%m-%d %H:%M:%S"
-                ]
+                year = int(self.year_var.get())
+                month = int(self.month_var.get())
+                
+                # Calculate the number of days in the selected month/year
+                _, num_days = calendar.monthrange(year, month)
+                
+                # Update the values in the day combobox
+                days = [f"{d:02d}" for d in range(1, num_days + 1)]
+                self.day_cb['values'] = days
+                
+                # If the currently selected day is invalid for the new month (e.g., 31st in Feb), adjust it.
+                current_day = self.day_var.get()
+                if current_day:
+                    if int(current_day) > num_days:
+                        self.day_var.set(days[-1])
+                else:
+                    self.day_var.set("01")
+                    
+            except ValueError:
+                # Ignore errors during initialization or partial input
+                pass
 
-                for fmt in formats:
-                    try:
-                        parsed_datetime = dt.datetime.strptime(input_text, fmt)
+        def get_selected_datetime(self):
+            """Construct and return a datetime object from the picker's current values."""
+            try:
+                year = int(self.year_var.get())
+                month = int(self.month_var.get())
+                day = int(self.day_var.get())
+                hour = int(self.hour_var.get())
+                minute = int(self.minute_var.get())
+                return dt.datetime(year, month, day, hour, minute)
+            except ValueError:
+                return None
 
-                        # 如果沒有年份，使用當前年份
-                        if fmt.startswith("%m/"):
-                            parsed_datetime = parsed_datetime.replace(year=dt.datetime.now().year)
 
-                        # 驗證日期時間是否在未來
-                        if parsed_datetime <= dt.datetime.now():
-                            # 如果是過去的時間，自動加一天
-                            if parsed_datetime.time() != dt.datetime.now().time():
-                                parsed_datetime = parsed_datetime.replace(day=parsed_datetime.day + 1)
-
-                        self.selected_datetime = parsed_datetime
-                        self.datetime_entry.config(foreground=self.colors['success'])
-                        return
-
-                    except ValueError:
-                        continue
-
-                # 如果所有格式都失敗
-                self.selected_datetime = None
-                self.datetime_entry.config(foreground=self.colors['delete'])
-
-            except Exception:
-                self.selected_datetime = None
-                self.datetime_entry.config(foreground=self.colors['delete'])
-
-        def show_notification_manager(self):
-            """顯示通知管理對話框"""
-            # 創建通知管理窗口
-            manager_window = tk.Toplevel(self.root)
-            manager_window.title("通知管理")
-            manager_window.geometry("600x400")
-            manager_window.resizable(True, True)
-            manager_window.transient(self.root)
-            manager_window.grab_set()
-
-            # 設置 Apple 風格樣式
-            manager_frame = ttk.Frame(manager_window, padding="20")
-            manager_frame.pack(fill=tk.BOTH, expand=True)
-
-            # 標題
-            title_label = ttk.Label(
-                manager_frame, text="預定通知管理", style="Header.TLabel"
-            )
-            title_label.pack(pady=(0, 20))
-
-            # 通知列表框架
-            list_frame = ttk.Frame(manager_frame)
-            list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
-
-            # 列表框和滾動條
-            notification_listbox = tk.Listbox(list_frame, font=("SF Pro Text", 12))
-            scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=notification_listbox.yview)
-            notification_listbox.configure(yscrollcommand=scrollbar.set)
-
-            notification_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-            # 按鈕框架
-            button_frame = ttk.Frame(manager_frame)
-            button_frame.pack(fill=tk.X)
-
-            # 刷新按鈕
-            refresh_button = ttk.Button(
-                button_frame, text="🔄 刷新", command=lambda: self.refresh_notification_list(notification_listbox)
-            )
-            refresh_button.pack(side=tk.LEFT, padx=(0, 10))
-
-            # 取消選中通知按鈕
-            cancel_button = ttk.Button(
-                button_frame, text="❌ 取消選中", command=lambda: self.cancel_selected_notification(notification_listbox, manager_window)
-            )
-            cancel_button.pack(side=tk.LEFT, padx=(0, 10))
-
-            # 關閉按鈕
-            close_button = ttk.Button(
-                button_frame, text="關閉", command=manager_window.destroy
-            )
-            close_button.pack(side=tk.RIGHT)
-
-            # 初始加載通知列表
-            self.refresh_notification_list(notification_listbox)
-
-        def refresh_notification_list(self, listbox):
-            """刷新通知列表顯示"""
-            # 清空現有列表
-            listbox.delete(0, tk.END)
-
-            # 獲取所有預定的通知
-            scheduled_notifications = self.notification_scheduler.get_all_scheduled()
-            scheduled_tasks = self.todolist.get_scheduled_tasks()
-
-            if not scheduled_notifications and not scheduled_tasks:
-                listbox.insert(tk.END, "  沒有預定的通知")
-                return
-
-            # 顯示調度器中的通知
-            if scheduled_notifications:
-                listbox.insert(tk.END, "  活躍通知:")
-                for i, notification in enumerate(scheduled_notifications):
-                    remaining_time = notification['remaining_seconds']
-                    hours = int(remaining_time // 3600)
-                    minutes = int((remaining_time % 3600) // 60)
-                    time_str = f"{hours:02d}:{minutes:02d}"
-                    listbox.insert(tk.END, f"    ⏰ {notification['task_text']} - 剩餘 {time_str}")
-
-            # 顯示帶通知時間的任務
-            if scheduled_tasks:
-                if scheduled_notifications:
-                    listbox.insert(tk.END, "")  # 分隔線
-                listbox.insert(tk.END, "  帶通知的任務:")
-                for task in scheduled_tasks:
-                    time_str = task['notification_time'].strftime("%m/%d %H:%M")
-                    listbox.insert(tk.END, f"    📌 {task['text']} - {time_str}")
-
-        def cancel_selected_notification(self, listbox, parent_window):
-            """取消選中的通知"""
-            selection = listbox.curselection()
-            if not selection:
-                messagebox.showinfo("提示", "請先選擇要取消的通知", parent=parent_window)
-                return
-
-            selected_index = selection[0]
-            selected_text = listbox.get(selected_index)
-
-            # 解析選中的項目
-            if "📌" in selected_text:
-                # 這是一個任務項，需要從 todolist 中移除
-                task_text = selected_text.split("📌 ")[1].split(" -")[0].strip()
-                # 找到對應的任務並取消通知
-                for task in self.todolist.get_scheduled_tasks():
-                    if task['text'] == task_text:
-                        self.notification_scheduler.cancel_notification(task['id'])
-                        # 移除通知時間，轉為普通任務
-                        task['notification_time'] = None
-                        break
-            elif "⏰" in selected_text:
-                # 這是一個活躍通知
-                task_text = selected_text.split("⏰ ")[1].split(" -")[0].strip()
-                # 找到對應的任務並移除
-                for task in self.todolist.get_scheduled_tasks():
-                    if task['text'] == task_text:
-                        self.todolist.remove_task(task['id'])
-                        break
-
-            # 刷新列表
-            self.refresh_notification_list(listbox)
-            messagebox.showinfo("成功", "通知已取消", parent=parent_window)
-
-    # 創建並運行GUI
+    # Initialize and run the main application
     root = tk.Tk()
     app = TodoListGUI(root)
     root.mainloop()
