@@ -553,6 +553,7 @@ if __name__ == "__main__":
                 background=self.colors['success'],
                 foreground="white",
                 borderwidth=0,
+                focuscolor="none",
                 font=("SF Pro Text", 13, "bold"),
                 padding=(8, 4),
                 relief="flat"
@@ -561,7 +562,9 @@ if __name__ == "__main__":
             self.style.configure("Success.TButton", borderradius=8)
             self.style.map(
                 "Success.TButton",
-                background=[("active", "#28a745"), ("pressed", "#218838")],
+                background=[("active", "#28a745"), ("pressed", "#218838"), ("!disabled", self.colors['success'])],
+                foreground=[("!disabled", "white")],
+                focuscolor=[("!disabled", "none")],
                 relief=[("pressed", "sunken"), ("!pressed", "flat")]
             )
 
@@ -805,21 +808,41 @@ if __name__ == "__main__":
             )
             task_label.pack(side="left", fill="x", expand=True)
             
-            # Complete Button (Checkmark)
-            complete_btn = ttk.Button(
+            # Complete Button (Checkmark) - using Label to avoid macOS button rendering artifacts
+            complete_btn = tk.Label(
                 row_frame,
                 text="✓",
-                width=3,
-                style="Success.TButton",
-                command=lambda t=task_data: self.complete_task(t)
+                width=4,
+                bg=self.colors['success'],
+                fg="white",
+                font=("SF Pro Text", 13, "bold"),
+                cursor="hand2"
             )
-            complete_btn.pack(side="right", padx=5)
+            complete_btn.pack(side="right", padx=5, ipady=3) # ipady adds vertical padding inside the label
+
+            # Bind click event
+            complete_btn.bind("<Button-1>", lambda e, t=task_data: self.complete_task(t))
+
+            # Add hover effects manually since Label doesn't support activebackground
+            def on_enter(e):
+                e.widget.config(bg="#218838") # Darker green on hover
+            
+            def on_leave(e):
+                e.widget.config(bg=self.colors['success']) # Restore original color
+
+            complete_btn.bind("<Enter>", on_enter)
+            complete_btn.bind("<Leave>", on_leave)
 
         def complete_task(self, task):
             """
             Mark a task as completed.
             This removes the task from the list and cancels any associated notifications.
             """
+            # Use after to delay the destruction slightly, allowing the click event to finish.
+            # This prevents ghost artifacts on macOS when destroying the triggering widget.
+            self.root.after(10, lambda: self._finalize_complete_task(task))
+
+        def _finalize_complete_task(self, task):
             task_id = task.get('id')
             if task_id:
                 # Cancel any scheduled notification for this task
