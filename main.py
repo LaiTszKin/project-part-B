@@ -5,6 +5,263 @@ import threading
 import uuid
 import queue
 import calendar
+import platform
+import subprocess
+from abc import ABC, abstractmethod
+from typing import Optional
+
+
+# =============================================================================
+# Platform Detection & Configuration
+# =============================================================================
+
+def get_current_platform() -> str:
+    """
+    Detect the current operating system platform.
+    
+    Returns:
+        str: One of 'darwin' (macOS), 'windows', or 'linux'.
+    """
+    system = platform.system().lower()
+    if system == 'darwin':
+        return 'darwin'
+    elif system == 'windows':
+        return 'windows'
+    else:
+        return 'linux'
+
+
+# Font configuration mapping UI elements to platform-specific fonts
+PLATFORM_FONTS = {
+    'darwin': {
+        'display': 'SF Pro Display',
+        'text': 'SF Pro Text',
+        'body_size': 13,
+        'title_size': 28,
+        'input_size': 15,
+        'secondary_size': 11,
+    },
+    'windows': {
+        'display': 'Segoe UI',
+        'text': 'Segoe UI',
+        'body_size': 12,
+        'title_size': 24,
+        'input_size': 14,
+        'secondary_size': 10,
+    },
+    'linux': {
+        'display': 'DejaVu Sans',
+        'text': 'DejaVu Sans',
+        'body_size': 12,
+        'title_size': 24,
+        'input_size': 14,
+        'secondary_size': 10,
+    },
+}
+
+
+def get_font_config() -> dict:
+    """
+    Get the font configuration for the current platform.
+    
+    Returns:
+        dict: Font configuration with keys 'display', 'text', and size values.
+    """
+    current_platform = get_current_platform()
+    return PLATFORM_FONTS.get(current_platform, PLATFORM_FONTS['linux'])
+
+
+# =============================================================================
+# Notification Strategy Pattern
+# =============================================================================
+
+class NotificationStrategy(ABC):
+    """Abstract base class for platform-specific notification implementations."""
+    
+    @abstractmethod
+    def show_notification(self, title: str, message: str, subtitle: Optional[str] = None, sound: Optional[str] = None) -> bool:
+        """
+        Display a notification to the user.
+        
+        Args:
+            title: The notification title.
+            message: The notification body text.
+            subtitle: Optional subtitle text.
+            sound: Optional sound name to play.
+        
+        Returns:
+            bool: True if the notification was shown successfully, False otherwise.
+        """
+        pass
+
+
+class MacOSNotificationStrategy(NotificationStrategy):
+    """macOS notification implementation using AppleScript."""
+    
+    def show_notification(self, title: str, message: str, subtitle: Optional[str] = None, sound: Optional[str] = "Glass") -> bool:
+        """Display a native macOS notification via AppleScript."""
+        try:
+            # Escape quotes in the message for AppleScript
+            escaped_message = message.replace('"', '\\"')
+            escaped_title = title.replace('"', '\\"')
+            
+            script_parts = [f'display notification "{escaped_message}" with title "{escaped_title}"']
+            if subtitle:
+                escaped_subtitle = subtitle.replace('"', '\\"')
+                script_parts[0] += f' subtitle "{escaped_subtitle}"'
+            if sound:
+                script_parts[0] += f' sound name "{sound}"'
+            
+            script = script_parts[0]
+            
+            result = subprocess.run(
+                ['osascript', '-e', script],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return result.returncode == 0
+        except Exception as e:
+            print(f"macOS notification failed: {e}")
+            return False
+
+
+class WindowsNotificationStrategy(NotificationStrategy):
+    """Windows notification implementation using PowerShell Toast notifications."""
+    
+    def show_notification(self, title: str, message: str, subtitle: Optional[str] = None, sound: Optional[str] = None) -> bool:
+        """Display a Windows Toast notification via PowerShell."""
+        try:
+            # Escape single quotes for PowerShell
+            escaped_message = message.replace("'", "''")
+            escaped_title = title.replace("'", "''")
+            
+            # PowerShell script to show a Toast notification
+            # Uses BurntToast module if available, otherwise falls back to BalloonTip
+            ps_script = f'''
+$ErrorActionPreference = 'SilentlyContinue'
+
+# Try using Windows.UI.Notifications (built-in, Windows 10+)
+try {{
+    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+    [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+
+    $template = @"
+<toast>
+    <visual>
+        <binding template="ToastText02">
+            <text id="1">{escaped_title}</text>
+            <text id="2">{escaped_message}</text>
+        </binding>
+    </visual>
+</toast>
+"@
+
+    $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $xml.LoadXml($template)
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Reminders").Show($toast)
+    exit 0
+}} catch {{}}
+
+# Fallback to System Tray balloon notification
+try {{
+    Add-Type -AssemblyName System.Windows.Forms
+    $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
+    $notifyIcon.Icon = [System.Drawing.SystemIcons]::Information
+    $notifyIcon.BalloonTipTitle = '{escaped_title}'
+    $notifyIcon.BalloonTipText = '{escaped_message}'
+    $notifyIcon.Visible = $true
+    $notifyIcon.ShowBalloonTip(5000)
+    Start-Sleep -Seconds 5
+    $notifyIcon.Dispose()
+    exit 0
+}} catch {{
+    exit 1
+}}
+'''
+            
+            result = subprocess.run(
+                ['powershell', '-ExecutionPolicy', 'Bypass', '-Command', ps_script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            return result.returncode == 0
+        except Exception as e:
+            print(f"Windows notification failed: {e}")
+            return False
+
+
+class FallbackNotificationStrategy(NotificationStrategy):
+    """Fallback notification strategy using console output or message box."""
+    
+    def __init__(self, use_messagebox: bool = True):
+        """
+        Initialize the fallback strategy.
+        
+        Args:
+            use_messagebox: If True, attempt to use Tkinter messagebox. If False, use console only.
+        """
+        self.use_messagebox = use_messagebox
+    
+    def show_notification(self, title: str, message: str, subtitle: Optional[str] = None, sound: Optional[str] = None) -> bool:
+        """Display a fallback notification via console or message box."""
+        if self.use_messagebox:
+            try:
+                import tkinter as tk
+                from tkinter import messagebox
+                
+                # Try to find an existing root window
+                root = tk._default_root
+                if root is None:
+                    root = tk.Tk()
+                    root.withdraw()
+                    cleanup_root = True
+                else:
+                    cleanup_root = False
+                
+                full_message = message
+                if subtitle:
+                    full_message = f"{subtitle}\n\n{message}"
+                
+                messagebox.showinfo(title, full_message)
+                
+                if cleanup_root:
+                    root.destroy()
+                
+                return True
+            except Exception as e:
+                print(f"Message box notification failed: {e}")
+        
+        # Ultimate fallback: console output
+        print("=" * 40)
+        print(f"=== {title} ===")
+        if subtitle:
+            print(f"[{subtitle}]")
+        print(message)
+        print("=" * 40)
+        return True
+
+
+def get_notification_strategy() -> NotificationStrategy:
+    """
+    Get the appropriate notification strategy for the current platform.
+    
+    Returns:
+        NotificationStrategy: The platform-specific notification strategy.
+    """
+    current_platform = get_current_platform()
+    
+    if current_platform == 'darwin':
+        return MacOSNotificationStrategy()
+    elif current_platform == 'windows':
+        return WindowsNotificationStrategy()
+    else:
+        return FallbackNotificationStrategy(use_messagebox=True)
+
+
 class todolist:
     def __init__(self):
         self.tasks = []
@@ -135,6 +392,8 @@ class NotificationScheduler:
             self.notification_queue = queue.Queue()
             self.fallback_handler = None
             self.running = True
+            # Initialize the platform-specific notification strategy
+            self.notification_strategy = get_notification_strategy()
             self.daemon_thread = threading.Thread(target=self._notification_daemon, daemon=True)
             self.daemon_thread.start()
             self.initialized = True
@@ -235,41 +494,29 @@ class NotificationScheduler:
 
     def _show_notification(self, notification):
         """
-        Display the notification to the user. On macOS, it attempts to use native system notifications.
+        Display the notification to the user using the platform-specific strategy.
 
         Args:
             notification: A dictionary containing details of the notification to display.
         """
-        try:
-            # Import necessary modules for running system commands and checking the OS platform.
-            import subprocess
-            import platform
-
-            if platform.system() == "Darwin":  # macOS
-                title = "Reminder"
-                message = f"Reminder: {notification['task_text']}"
-                sound = "Glass"  # Default Apple system sound
-
-                # AppleScript command to display a native notification.
-                script = f'''
-                display notification "{message}" with title "{title}" subtitle "Scheduled Reminder" sound name "{sound}"
-                '''
-
-                result = subprocess.run(
-                    ['osascript', '-e', script],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                # Even if the system notification is sent, also show the in-app GUI notification as a fallback/confirmation.
-                self._fallback_notification(notification)
-            else:
-                # For non-macOS platforms, strictly use the fallback (GUI) notification method.
-                self._fallback_notification(notification)
-
-        except Exception as e:
-            print(f"Failed to send notification: {e}")
-            # If an error occurs (e.g., osascript fails), default to the fallback method.
+        title = "Reminder"
+        message = f"Reminder: {notification['task_text']}"
+        subtitle = "Scheduled Reminder"
+        
+        # Use the platform-specific notification strategy
+        success = self.notification_strategy.show_notification(
+            title=title,
+            message=message,
+            subtitle=subtitle
+        )
+        
+        # Always also call the fallback handler for in-app notification (if set)
+        # This ensures the GUI is updated even when native notifications work
+        if success:
+            self._fallback_notification(notification)
+        else:
+            # If native notification failed, still show fallback
+            print("Native notification failed, using fallback")
             self._fallback_notification(notification)
 
     def _fallback_notification(self, notification):
@@ -427,6 +674,9 @@ if __name__ == "__main__":
             self.notification_scheduler = NotificationScheduler()
             self.notification_scheduler.set_fallback_handler(self.handle_fallback_notification)
 
+            # Get platform-specific font configuration
+            self.fonts = get_font_config()
+
             # Define a color palette inspired by Apple's Human Interface Guidelines
             self.colors = {
                 'bg': '#F2F2F7',          # Light gray system background
@@ -479,18 +729,18 @@ if __name__ == "__main__":
             # Frame Styles
             self.style.configure("TFrame", background=self.colors['bg'])
 
-            # Label Styles - Using SF Pro Text if available
+            # Label Styles - Using platform-specific fonts
             self.style.configure(
                 "TLabel",
                 background=self.colors['bg'],
                 foreground=self.colors['text'],
-                font=("SF Pro Text", 13)  # Fallback to system default if SF Pro is missing
+                font=(self.fonts['text'], self.fonts['body_size'])
             )
 
             # Header Label Style
             self.style.configure(
                 "Header.TLabel",
-                font=("SF Pro Display", 28, "bold"),
+                font=(self.fonts['display'], self.fonts['title_size'], "bold"),
                 background=self.colors['bg'],
                 foreground=self.colors['text']
             )
@@ -498,7 +748,7 @@ if __name__ == "__main__":
             # Secondary Text Style
             self.style.configure(
                 "Secondary.TLabel",
-                font=("SF Pro Text", 11),
+                font=(self.fonts['text'], self.fonts['secondary_size']),
                 background=self.colors['bg'],
                 foreground=self.colors['secondary_text']
             )
@@ -516,7 +766,7 @@ if __name__ == "__main__":
                 foreground="white",
                 borderwidth=0,
                 focuscolor="none",
-                font=("SF Pro Text", 13, "bold"),
+                font=(self.fonts['text'], self.fonts['body_size'], "bold"),
                 padding=(20, 10),
                 relief="flat"
             )
@@ -534,7 +784,7 @@ if __name__ == "__main__":
                 background=self.colors['card'],
                 foreground=self.colors['primary'], # Mimics iOS secondary action buttons
                 borderwidth=0,
-                font=("SF Pro Text", 13),
+                font=(self.fonts['text'], self.fonts['body_size']),
                 padding=(16, 8),
                 relief="flat"
             )
@@ -554,7 +804,7 @@ if __name__ == "__main__":
                 foreground="white",
                 borderwidth=0,
                 focuscolor="none",
-                font=("SF Pro Text", 13, "bold"),
+                font=(self.fonts['text'], self.fonts['body_size'], "bold"),
                 padding=(8, 4),
                 relief="flat"
             )
@@ -571,7 +821,7 @@ if __name__ == "__main__":
             # Entry Field Style
             self.style.configure(
                 "TEntry",
-                font=("SF Pro Text", 15),
+                font=(self.fonts['text'], self.fonts['input_size']),
                 padding=(12, 12),
                 borderwidth=0
             )
@@ -579,7 +829,7 @@ if __name__ == "__main__":
             # Combobox Style
             self.style.configure(
                 "TCombobox",
-                font=("SF Pro Text", 15),
+                font=(self.fonts['text'], self.fonts['input_size']),
                 padding=(12, 12),
                 borderwidth=0
             )
@@ -802,7 +1052,7 @@ if __name__ == "__main__":
                 text=text, 
                 bg=self.colors['card'],
                 fg=self.colors['delete'] if is_overdue else self.colors['text'],
-                font=("SF Pro Text", 15),
+                font=(self.fonts['text'], self.fonts['input_size']),
                 anchor="w",
                 justify="left"
             )
@@ -815,7 +1065,7 @@ if __name__ == "__main__":
                 width=4,
                 bg=self.colors['success'],
                 fg="white",
-                font=("SF Pro Text", 13, "bold"),
+                font=(self.fonts['text'], self.fonts['body_size'], "bold"),
                 cursor="hand2"
             )
             complete_btn.pack(side="right", padx=5, ipady=3) # ipady adds vertical padding inside the label
