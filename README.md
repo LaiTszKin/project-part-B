@@ -14,14 +14,18 @@ git clone https://github.com/Yamiyorunoshura/project-part-B.git
 
 ## Start the programe
 
-```Go to the project directory
+Go to the project directory
+```
 cd ~/project-part-B
 ```
 
-```Sync the dependencies
+Sync the dependencies
+```
 uv sync
 ```
 
-```Or run the program directly
+Or run the program directly
+```
 uv run main.py
 ```
+
