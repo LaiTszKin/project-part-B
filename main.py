@@ -451,6 +451,31 @@ if __name__ == "__main__":
             self.style = ttk.Style()
             self.style.theme_use("clam")
 
+            # Configure rounded button elements for softer interface
+            # The clam theme supports element options including roundness
+            self.style.element_create("RoundedButton.border", "from", "clam")
+            
+            # Define a custom layout for rounded buttons using the roundness option
+            self.style.layout("Rounded.TButton", [
+                ("Button.border", {
+                    "sticky": "nswe",
+                    "border": "1",
+                    "children": [
+                        ("Button.focus", {
+                            "sticky": "nswe",
+                            "children": [
+                                ("Button.padding", {
+                                    "sticky": "nswe",
+                                    "children": [
+                                        ("Button.label", {"sticky": "nswe"})
+                                    ]
+                                })
+                            ]
+                        })
+                    ]
+                })
+            ])
+
             # Frame Styles
             self.style.configure("TFrame", background=self.colors['bg'])
 
@@ -484,7 +509,7 @@ if __name__ == "__main__":
                 background=self.colors['card']
             )
 
-            # Primary Button Style - Bold white text on blue background
+            # Primary Button Style - Bold white text on blue background with rounded corners
             self.style.configure(
                 "Primary.TButton",
                 background=self.colors['primary'],
@@ -492,40 +517,52 @@ if __name__ == "__main__":
                 borderwidth=0,
                 focuscolor="none",
                 font=("SF Pro Text", 13, "bold"),
-                padding=(20, 10)
+                padding=(20, 10),
+                relief="flat"
             )
+            # Configure element options for rounded appearance
+            self.style.configure("Primary.TButton", borderradius=12)
             self.style.map(
                 "Primary.TButton",
-                background=[("active", "#0051D5"), ("pressed", "#0047B9")]
+                background=[("active", "#0051D5"), ("pressed", "#0047B9")],
+                relief=[("pressed", "sunken"), ("!pressed", "flat")]
             )
 
-            # Secondary Button Style - Blue text on white/clear background
+            # Secondary Button Style - Blue text on white/clear background with rounded corners
             self.style.configure(
                 "Secondary.TButton",
                 background=self.colors['card'],
                 foreground=self.colors['primary'], # Mimics iOS secondary action buttons
                 borderwidth=0,
                 font=("SF Pro Text", 13),
-                padding=(16, 8)
+                padding=(16, 8),
+                relief="flat"
             )
+            # Configure element options for rounded appearance
+            self.style.configure("Secondary.TButton", borderradius=10)
             self.style.map(
                 "Secondary.TButton",
                 background=[("active", self.colors['hover'])],
-                foreground=[("active", self.colors['primary'])]
+                foreground=[("active", self.colors['primary'])],
+                relief=[("pressed", "sunken"), ("!pressed", "flat")]
             )
 
-            # Success Button Style (Checkmark)
+            # Success Button Style (Checkmark) with rounded corners
             self.style.configure(
                 "Success.TButton",
                 background=self.colors['success'],
                 foreground="white",
                 borderwidth=0,
                 font=("SF Pro Text", 13, "bold"),
-                padding=(8, 4)
+                padding=(8, 4),
+                relief="flat"
             )
+            # Configure element options for rounded appearance
+            self.style.configure("Success.TButton", borderradius=8)
             self.style.map(
                 "Success.TButton",
-                background=[("active", "#28a745"), ("pressed", "#218838")]
+                background=[("active", "#28a745"), ("pressed", "#218838")],
+                relief=[("pressed", "sunken"), ("!pressed", "flat")]
             )
 
             # Entry Field Style
