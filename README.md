@@ -3,7 +3,7 @@
 ## Install UV
 
 ```
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+pip install uv
 ```
 
 ## Clone the project
@@ -28,4 +28,5 @@ Or run the program directly
 ```
 uv run main.py
 ```
+
 
