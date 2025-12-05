@@ -1,6 +1,8 @@
 # Import the necessary modules: datetime for handling dates and times, threading for concurrent operations,
 # uuid for generating unique task IDs, queue for thread-safe communication, and calendar for date calculations.
 import datetime as dt
+import os
+import sqlite3
 import threading
 import uuid
 import queue
@@ -8,6 +10,7 @@ import calendar
 import platform
 import subprocess
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional
 
 
@@ -69,6 +72,234 @@ def get_font_config() -> dict:
     """
     current_platform = get_current_platform()
     return PLATFORM_FONTS.get(current_platform, PLATFORM_FONTS['linux'])
+
+
+# =============================================================================
+# Data Persistence Layer
+# =============================================================================
+
+def get_user_data_dir() -> Path:
+    """
+    Get the cross-platform user data directory for storing application data.
+    
+    Returns:
+        Path: The path to the application's data directory.
+              - macOS: ~/Library/Application Support/Reminders/
+              - Windows: %APPDATA%/Reminders/
+              - Linux: ~/.local/share/Reminders/
+    """
+    current_platform = get_current_platform()
+    
+    if current_platform == 'darwin':
+        base_dir = Path.home() / 'Library' / 'Application Support'
+    elif current_platform == 'windows':
+        appdata = os.environ.get('APPDATA', '')
+        base_dir = Path(appdata) if appdata else Path.home() / 'AppData' / 'Roaming'
+    else:  # Linux and other Unix-like systems
+        xdg_data = os.environ.get('XDG_DATA_HOME', '')
+        base_dir = Path(xdg_data) if xdg_data else Path.home() / '.local' / 'share'
+    
+    app_dir = base_dir / 'Reminders'
+    app_dir.mkdir(parents=True, exist_ok=True)
+    return app_dir
+
+
+class TaskRepository:
+    """
+    Repository class for persisting tasks to SQLite database.
+    Handles all database operations including CRUD and schema management.
+    """
+    
+    def __init__(self, db_path: Optional[Path] = None):
+        """
+        Initialize the TaskRepository with a database connection.
+        
+        Args:
+            db_path: Optional path to the database file. If None, uses the default
+                     location in the user's data directory.
+        """
+        if db_path is None:
+            db_path = get_user_data_dir() / 'tasks.db'
+        
+        self.db_path = db_path
+        self._connection: Optional[sqlite3.Connection] = None
+        self._init_database()
+    
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get or create a database connection."""
+        if self._connection is None:
+            try:
+                self._connection = sqlite3.connect(
+                    str(self.db_path),
+                    check_same_thread=False
+                )
+                self._connection.row_factory = sqlite3.Row
+            except sqlite3.Error as e:
+                print(f"Database connection error: {e}")
+                raise
+        return self._connection
+    
+    def _init_database(self) -> None:
+        """Initialize the database schema if it doesn't exist."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    notification_time TEXT,
+                    created_at TEXT NOT NULL
+                )
+            ''')
+            conn.commit()
+        except sqlite3.Error as e:
+            print(f"Database initialization error: {e}")
+            # If database is corrupted, try to recreate it
+            self._handle_database_error()
+    
+    def _handle_database_error(self) -> None:
+        """Handle database errors by attempting to recreate the database."""
+        try:
+            if self._connection:
+                self._connection.close()
+                self._connection = None
+            
+            # Backup the corrupted file
+            if self.db_path.exists():
+                backup_path = self.db_path.with_suffix('.db.backup')
+                try:
+                    self.db_path.rename(backup_path)
+                    print(f"Corrupted database backed up to: {backup_path}")
+                except OSError:
+                    self.db_path.unlink()
+            
+            # Reinitialize with fresh database
+            self._init_database()
+        except Exception as e:
+            print(f"Failed to recover database: {e}")
+    
+    def save_task(self, task: dict) -> bool:
+        """
+        Save a task to the database.
+        
+        Args:
+            task: A dictionary containing task data with keys:
+                  'id', 'text', 'notification_time', 'created_at'
+        
+        Returns:
+            bool: True if save was successful, False otherwise.
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Convert datetime objects to ISO format strings
+            notification_time = task.get('notification_time')
+            if notification_time and isinstance(notification_time, dt.datetime):
+                notification_time = notification_time.isoformat()
+            
+            created_at = task.get('created_at')
+            if isinstance(created_at, dt.datetime):
+                created_at = created_at.isoformat()
+            else:
+                created_at = dt.datetime.now().isoformat()
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO tasks (id, text, notification_time, created_at)
+                VALUES (?, ?, ?, ?)
+            ''', (task['id'], task['text'], notification_time, created_at))
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Error saving task: {e}")
+            return False
+    
+    def load_all_tasks(self) -> list:
+        """
+        Load all tasks from the database.
+        
+        Returns:
+            list: A list of task dictionaries.
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, text, notification_time, created_at FROM tasks')
+            rows = cursor.fetchall()
+            
+            tasks = []
+            for row in rows:
+                task = {
+                    'id': row['id'],
+                    'text': row['text'],
+                    'notification_time': None,
+                    'created_at': dt.datetime.now()
+                }
+                
+                # Parse notification_time if present
+                if row['notification_time']:
+                    try:
+                        task['notification_time'] = dt.datetime.fromisoformat(row['notification_time'])
+                    except ValueError:
+                        pass
+                
+                # Parse created_at
+                if row['created_at']:
+                    try:
+                        task['created_at'] = dt.datetime.fromisoformat(row['created_at'])
+                    except ValueError:
+                        pass
+                
+                tasks.append(task)
+            
+            return tasks
+        except sqlite3.Error as e:
+            print(f"Error loading tasks: {e}")
+            return []
+    
+    def delete_task(self, task_id: str) -> bool:
+        """
+        Delete a task from the database.
+        
+        Args:
+            task_id: The unique identifier of the task to delete.
+        
+        Returns:
+            bool: True if deletion was successful, False otherwise.
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Error deleting task: {e}")
+            return False
+    
+    def delete_all_tasks(self) -> bool:
+        """
+        Delete all tasks from the database.
+        
+        Returns:
+            bool: True if deletion was successful, False otherwise.
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM tasks')
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Error deleting all tasks: {e}")
+            return False
+    
+    def close(self) -> None:
+        """Close the database connection."""
+        if self._connection:
+            self._connection.close()
+            self._connection = None
 
 
 # =============================================================================
@@ -263,9 +494,21 @@ def get_notification_strategy() -> NotificationStrategy:
 
 
 class todolist:
-    def __init__(self):
+    def __init__(self, repository: Optional[TaskRepository] = None):
+        """
+        Initialize the todolist with optional persistence support.
+        
+        Args:
+            repository: Optional TaskRepository for persisting tasks. If provided,
+                        tasks will be loaded from and saved to the database.
+        """
+        self.repository = repository
         self.tasks = []
         self.selected_index = None
+        
+        # Load existing tasks from database if repository is provided
+        if self.repository:
+            self.tasks = self.repository.load_all_tasks()
 
     def add_task(self, task, notification_time=None):
         """
@@ -288,12 +531,18 @@ class todolist:
                 'created_at': dt.datetime.now()
             }
             self.tasks.append(task_dict)
+            # Persist to database
+            if self.repository:
+                self.repository.save_task(task_dict)
         else:
             # If the input is already a dictionary (representing the newer task format), ensure it has an ID and creation time
             # if they are missing, then add it to the list.
             task['id'] = task.get('id', str(uuid.uuid4()))
             task['created_at'] = task.get('created_at', dt.datetime.now())
             self.tasks.append(task)
+            # Persist to database
+            if self.repository:
+                self.repository.save_task(task)
 
         if notification_time:
             return f'Scheduled task "{task}" set for {notification_time.strftime("%Y-%m-%d %H:%M")}.'
@@ -315,13 +564,20 @@ class todolist:
             for task in self.tasks:
                 if isinstance(task, dict) and task.get('id') == task_or_id:
                     self.tasks.remove(task)
+                    # Sync deletion to database
+                    if self.repository:
+                        self.repository.delete_task(task_or_id)
                     return f'Task "{task["text"]}" removed.'
                 elif isinstance(task, str) and task == task_or_id:
                     self.tasks.remove(task)
                     return f'Task "{task}" removed.'
         # If the input is a dictionary object, try to find and remove that exact object from the list.
         elif isinstance(task_or_id, dict) and task_or_id in self.tasks:
+            task_id = task_or_id.get('id')
             self.tasks.remove(task_or_id)
+            # Sync deletion to database
+            if self.repository and task_id:
+                self.repository.delete_task(task_id)
             return f'Task "{task_or_id["text"]}" removed.'
 
         return 'Task not found.'
@@ -330,11 +586,27 @@ class todolist:
         if 0 <= index < len(self.tasks):
             removed_task = self.tasks.pop(index)
             if isinstance(removed_task, dict):
+                # Sync deletion to database
+                task_id = removed_task.get('id')
+                if self.repository and task_id:
+                    self.repository.delete_task(task_id)
                 return f'Task "{removed_task["text"]}" removed.'
             else:
                 return f'Task "{removed_task}" removed.'
         else:
             return "Invalid task index."
+    
+    def clear_all_tasks(self):
+        """
+        Clear all tasks from the list and database.
+        
+        Returns:
+            bool: True if successful.
+        """
+        self.tasks = []
+        if self.repository:
+            self.repository.delete_all_tasks()
+        return True
 
     def view_tasks(self):
         if not self.tasks:
@@ -669,10 +941,19 @@ if __name__ == "__main__":
     class TodoListGUI:
         def __init__(self, root):
             self.root = root
-            self.todolist = todolist()
+            
+            # Initialize the task repository for persistence
+            self.task_repository = TaskRepository()
+            
+            # Initialize the todolist with the repository (loads existing tasks)
+            self.todolist = todolist(repository=self.task_repository)
+            
             # Initialize the notification scheduler and set up the thread-safe fallback handler
             self.notification_scheduler = NotificationScheduler()
             self.notification_scheduler.set_fallback_handler(self.handle_fallback_notification)
+            
+            # Reschedule notifications for any loaded tasks that have future notification times
+            self._reschedule_loaded_notifications()
 
             # Get platform-specific font configuration
             self.fonts = get_font_config()
@@ -858,6 +1139,27 @@ if __name__ == "__main__":
                 "Reminder",
                 f"Reminder: {notification['task_text']}"
             )
+
+        def _reschedule_loaded_notifications(self):
+            """
+            Reschedule notifications for tasks that were loaded from the database.
+            Only schedules notifications for tasks with future notification times.
+            """
+            scheduled_tasks = self.todolist.get_scheduled_tasks()
+            now = dt.datetime.now()
+            
+            for task in scheduled_tasks:
+                notification_time = task.get('notification_time')
+                task_id = task.get('id')
+                task_text = task.get('text', '')
+                
+                if notification_time and task_id and notification_time > now:
+                    # Schedule notification for future time
+                    self.notification_scheduler.schedule_notification(
+                        task_id,
+                        notification_time,
+                        task_text
+                    )
 
         def create_widgets(self):
             # Header Title
@@ -1142,8 +1444,8 @@ if __name__ == "__main__":
                         if isinstance(task, dict) and task.get('id'):
                             self.notification_scheduler.cancel_notification(task['id'])
 
-                    # Clear the data model
-                    self.todolist.tasks = []
+                    # Clear the data model (also clears from database)
+                    self.todolist.clear_all_tasks()
                     # Refresh the UI
                     self.refresh_task_list()
 
